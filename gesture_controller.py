@@ -68,6 +68,31 @@ class GestureController:
         results = self.hands.process(frame)
         frame.flags.writeable = True
         frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+    
+        # Draw visualization bars
+        frame_height, frame_width = frame.shape[:2]
+        center_x = frame_width // 2
+        
+        # Draw volume bars
+        volume_level = int(pygame.mixer.music.get_volume() * 10)
+        for i in range(10):
+            bar_height = 20
+            bar_y = frame_height // 2 - 100 + i * 25
+            color = (0, 255, 0) if i < volume_level else (100, 100, 100)
+            cv2.rectangle(frame, (center_x - 50, bar_y), 
+                         (center_x + 50, bar_y + bar_height), color, -1)
+    
+        # Draw speed and frequency indicators
+        cv2.putText(frame, f"speed", (50, frame_height // 2), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+        cv2.putText(frame, f"{self.current_speed:.2f}", (50, frame_height // 2 + 30), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+        
+        cv2.putText(frame, f"Frequency", (frame_width - 200, frame_height // 2), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+        frequency = int(self.sample_rate * self.current_pitch)
+        cv2.putText(frame, f"{frequency}", (frame_width - 200, frame_height // 2 + 30), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
 
         if results.multi_hand_landmarks:
             self.hand_count = len(results.multi_hand_landmarks)
@@ -81,31 +106,44 @@ class GestureController:
     def handle_gestures(self, hand_landmarks, all_hand_landmarks):
         """
         Handles gesture recognition and updates audio playback based on gestures.
-
-        Args:
-            hand_landmarks: Hand landmark data from MediaPipe.
-            all_hand_landmarks: All detected hand landmarks.
         """
         if len(all_hand_landmarks) == 2:
             # Get landmarks for both hands
             hand1_landmarks = all_hand_landmarks[0]
             hand2_landmarks = all_hand_landmarks[1]
-
-            # Calculate distance between hands
+    
+            # Calculate distance between hands for volume
             hand_distance = calculate_distance(
                 hand1_landmarks.landmark[self.mp_hands.HandLandmark.WRIST],
                 hand2_landmarks.landmark[self.mp_hands.HandLandmark.WRIST]
             )
-
-            # Map hand distance to speed with adjusted scaling
-            new_speed = np.clip(1.0 + (hand_distance - 0.3) * 2.0, 0.5, 2.0)
             
-            # Only update if change is significant
+            # Map hand distance to volume (0.0 to 1.0)
+            volume = np.clip(hand_distance, 0.0, 1.0)
+            pygame.mixer.music.set_volume(volume)
+    
+            # Handle speed control with first hand
+            thumb_tip1 = hand1_landmarks.landmark[self.mp_hands.HandLandmark.THUMB_TIP]
+            index_tip1 = hand1_landmarks.landmark[self.mp_hands.HandLandmark.INDEX_FINGER_TIP]
+            pinch_distance1 = calculate_distance(thumb_tip1, index_tip1)
+            
+            # Map first hand pinch to speed
+            new_speed = np.clip(1.0 + (pinch_distance1 - 0.1) * 2.0, 0.5, 2.0)
             if abs(new_speed - self.last_speed) > self.speed_threshold:
                 self.current_speed = new_speed
                 self.last_speed = new_speed
                 self.adjust_audio()
-                print(f"Speed updated: {self.current_speed:.2f}x")
+    
+            # Handle frequency control with second hand
+            thumb_tip2 = hand2_landmarks.landmark[self.mp_hands.HandLandmark.THUMB_TIP]
+            index_tip2 = hand2_landmarks.landmark[self.mp_hands.HandLandmark.INDEX_FINGER_TIP]
+            pinch_distance2 = calculate_distance(thumb_tip2, index_tip2)
+            
+            # Map second hand pinch to frequency
+            frequency_shift = np.clip((pinch_distance2 - 0.1) * 48 - 12, -12, 12)
+            if abs(frequency_shift - self.current_pitch) > self.pitch_threshold:
+                self.current_pitch = frequency_shift
+                self.adjust_audio()
 
         # Handle pitch control with one hand
         thumb_tip = hand_landmarks.landmark[self.mp_hands.HandLandmark.THUMB_TIP]
